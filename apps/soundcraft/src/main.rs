@@ -172,11 +172,13 @@ fn main() -> eframe::Result {
         "SoundCraft",
         options,
         Box::new(move |cc| {
-            let player = if no_audio { None } else { Some(soundcraft_playback::Player::new(Arc::new(engine.session().clone()))) };
+            let prefs = load_prefs();
+            let device = prefs.as_ref().and_then(|u| u.output_device.as_deref());
+            let player = if no_audio { None } else { Some(soundcraft_playback::Player::with_device(Arc::new(engine.session().clone()), device)) };
             let mut app = SoundApp::new(engine, player, services());
             app.autosave_dir = prefs_path().and_then(|p| p.parent().map(|d| d.join("Autosave")));
             app.preset_dir = prefs_path().and_then(|p| p.parent().map(|d| d.join("Presets")));
-            if let Some(ui) = load_prefs() {
+            if let Some(ui) = prefs {
                 app.ui = ui;
             }
             if let Some(port) = control_port {

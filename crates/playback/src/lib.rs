@@ -363,7 +363,13 @@ pub struct Player {
 impl Player {
     /// Open the default output device. Never fails: without a device it runs a silent clock.
     pub fn new(session: Arc<Session>) -> Player {
-        let p = Player::open(Arc::clone(&session));
+        Player::with_device(session, None)
+    }
+
+    /// Open the named output device (see [`output_device_names`]), falling back to the default
+    /// when it is missing. Never fails: without a device it runs a silent clock.
+    pub fn with_device(session: Arc<Session>, device: Option<&str>) -> Player {
+        let p = Player::open(Arc::clone(&session), device);
         // Hand the initial session's third-party plugins over.
         p.update_session(session);
         p
@@ -373,7 +379,7 @@ impl Player {
         self.side.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn open(session: Arc<Session>) -> Player {
+    fn open(session: Arc<Session>, device: Option<&str>) -> Player {
         let (gtx, grx) = channel();
         let side = Mutex::new(Side { shadow: HashMap::new(), rate: session.sample_rate.as_f64() as f32, editors: HashMap::new(), garbage: grx });
         let shared = Arc::new(Shared {
@@ -385,7 +391,7 @@ impl Player {
         let (tx, rx) = channel();
         let want = session.sample_rate.hz();
         let want_ch = u16::try_from(main_channels(&session)).unwrap_or(2);
-        match open_device(want, want_ch) {
+        match open_device(want, want_ch, device) {
             Ok((device, config, name)) => {
                 let rate = config.sample_rate.0;
                 let channels = usize::from(config.channels);
@@ -676,14 +682,30 @@ fn fold_gains(s: &Session) -> [(f32, f32); MAX_CHANNELS] {
     g
 }
 
-/// Open the default output device: f32 at the session rate if possible, with as many channels as
-/// it offers up to `want_ch` (at least stereo when available).
-fn open_device(want_rate: u32, want_ch: u16) -> Result<(cpal::Device, cpal::StreamConfig, String), String> {
+/// A device's display name (`None` when the backend can't report one).
+pub(crate) fn device_name(d: &cpal::Device) -> Option<String> {
+    use cpal::traits::DeviceTrait;
+    #[allow(deprecated)]
+    d.name().ok()
+}
+
+/// Names of the output devices on the default host, for a device picker.
+pub fn output_device_names() -> Vec<String> {
+    use cpal::traits::HostTrait;
+    cpal::default_host().output_devices().map(|ds| ds.filter_map(|d| device_name(&d)).collect()).unwrap_or_default()
+}
+
+/// Open an output device (the named one, else the default): f32 at the session rate if possible,
+/// with as many channels as it offers up to `want_ch` (at least stereo when available).
+fn open_device(want_rate: u32, want_ch: u16, wanted: Option<&str>) -> Result<(cpal::Device, cpal::StreamConfig, String), String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
-    let device = host.default_output_device().ok_or_else(|| "no default output device".to_string())?;
-    #[allow(deprecated)]
-    let name = device.name().unwrap_or_else(|_| "Audio device".into());
+    let named = wanted.and_then(|w| host.output_devices().ok()?.find(|d| device_name(d).as_deref() == Some(w)));
+    if let (Some(w), None) = (wanted, &named) {
+        log::warn!("output device {w:?} not found; using the default");
+    }
+    let device = named.or_else(|| host.default_output_device()).ok_or_else(|| "no default output device".to_string())?;
+    let name = device_name(&device).unwrap_or_else(|| "Audio device".into());
     // Prefer an f32 config at the session rate; else the device default (we resample).
     let want_ch = want_ch.max(2);
     let mut chosen: Option<cpal::StreamConfig> = None;

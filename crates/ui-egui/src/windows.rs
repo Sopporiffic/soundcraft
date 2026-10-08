@@ -5,6 +5,7 @@ use crate::theme::{Tokens, mono, rgb};
 use egui::{Color32, Sense, vec2};
 use serde_json::json;
 use soundcraft_model::{AutomationMode, ClipContent};
+use std::sync::Arc;
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     automation(app, ctx);
@@ -342,10 +343,30 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
 /// Setup › Playback Engine / Hardware.
 pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_playback_engine;
-    win(ctx, &mut open, "Playback Engine", vec2(380.0, 220.0), |ui| {
+    // Device lists are slow to enumerate: fetch once per opening (or on Refresh).
+    let lists_id = egui::Id::new("pe_devices");
+    if !open {
+        ctx.data_mut(|d| d.remove::<DeviceLists>(lists_id));
+    }
+    let mut refresh = false;
+    let mut pick_out: Option<Option<String>> = None;
+    let mut pick_in: Option<Option<String>> = None;
+    win(ctx, &mut open, "Playback Engine", vec2(420.0, 260.0), |ui| {
+        let lists = ui.ctx().data_mut(|d| {
+            d.get_temp_mut_or_insert_with(lists_id, || {
+                DeviceLists(Arc::new((soundcraft_playback::output_device_names(), soundcraft_playback::record::input_device_names())))
+            })
+            .0
+            .clone()
+        });
         egui::Grid::new("pe").num_columns(2).show(ui, |ui| {
             ui.label("Output device");
-            ui.label(app.player.as_ref().map_or("none".to_string(), |p| p.device_name.clone()));
+            if let Some(p) = device_combo(ui, "pe_out", app.ui.output_device.as_deref(), &lists.0) {
+                pick_out = Some(p);
+            }
+            ui.end_row();
+            ui.label("");
+            ui.label(app.player.as_ref().map_or("none".to_string(), |p| format!("Using: {}", p.device_name)));
             ui.end_row();
             ui.label("Device rate");
             ui.label(app.player.as_ref().map_or("-".to_string(), |p| format!("{} Hz", p.device_rate)));
@@ -354,6 +375,11 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
             ui.label(format!("{} Hz", app.engine.session().sample_rate.hz()));
             ui.end_row();
             ui.label("Input device");
+            if let Some(p) = device_combo(ui, "pe_in", app.ui.input_device.as_deref(), &lists.1) {
+                pick_in = Some(p);
+            }
+            ui.end_row();
+            ui.label("");
             ui.label(
                 app.recorder
                     .as_ref()
@@ -368,11 +394,47 @@ pub fn playback_engine(app: &mut SoundApp, ctx: &egui::Context) {
         if ui.checkbox(&mut dc, "Delay compensation").changed() {
             let _ = app.run("options.delay_compensation", json!({"value": dc}));
         }
-        if ui.button("Reconnect audio device").clicked() {
-            app.player = Some(soundcraft_playback::Player::new(app.engine.session_arc()));
+        ui.horizontal(|ui| {
+            if ui.button("Reconnect audio device").clicked() {
+                pick_out = Some(app.ui.output_device.clone());
+            }
+            if ui.button("Refresh device list").clicked() {
+                refresh = true;
+            }
+        });
+    });
+    if refresh {
+        ctx.data_mut(|d| d.remove::<DeviceLists>(lists_id));
+    }
+    if let Some(d) = pick_out {
+        app.set_output_device(d);
+    }
+    if let Some(d) = pick_in {
+        app.set_input_device(d);
+    }
+    app.ui.show_playback_engine = open;
+}
+
+/// (output, input) device names, cached in egui memory while the Playback Engine is open.
+#[derive(Clone, Default)]
+struct DeviceLists(Arc<(Vec<String>, Vec<String>)>);
+
+/// A device dropdown with "System default" first. Returns the new choice when it changed.
+fn device_combo(ui: &mut egui::Ui, id: &str, current: Option<&str>, names: &[String]) -> Option<Option<String>> {
+    const DEFAULT: &str = "System default";
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(id).width(260.0).selected_text(current.unwrap_or(DEFAULT)).show_ui(ui, |ui| {
+        if ui.selectable_label(current.is_none(), DEFAULT).clicked() && current.is_some() {
+            picked = Some(None);
+        }
+        for n in names {
+            let on = current == Some(n.as_str());
+            if ui.selectable_label(on, n).clicked() && !on {
+                picked = Some(Some(n.clone()));
+            }
         }
     });
-    app.ui.show_playback_engine = open;
+    picked
 }
 
 /// Setup › I/O: busses and output paths.
