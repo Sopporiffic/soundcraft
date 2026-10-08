@@ -238,7 +238,8 @@ fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str
         None => false,
     };
     let checked = checked_state(app, &n.path, id.as_deref());
-    let label = if checked { format!("✔ {}", n.label) } else { n.label.clone() };
+    let label = dynamic_label(app, id.as_deref()).unwrap_or_else(|| n.label.clone());
+    let label = if checked { format!("✔ {label}") } else { label };
     let shortcut = id.as_deref().and_then(soundcraft_engine::find_command).and_then(|c| c.shortcut).unwrap_or("");
     let btn = egui::Button::new(label).shortcut_text(shortcut);
     if ui.add_enabled(enabled, btn).clicked()
@@ -246,6 +247,16 @@ fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str
     {
         invoke_menu(app, &id, &n.path);
         ui.close();
+    }
+}
+
+/// Labels that follow state, like "Undo Volume" / "Can't Undo".
+fn dynamic_label(app: &SoundApp, id: Option<&str>) -> Option<String> {
+    let label = |verb: &str, l: Option<&str>| l.map_or_else(|| format!("Can't {verb}"), |l| format!("{verb} {l}"));
+    match id {
+        Some("edit.undo") => Some(label("Undo", app.engine.undo_label())),
+        Some("edit.redo") => Some(label("Redo", app.engine.redo_label())),
+        _ => None,
     }
 }
 
