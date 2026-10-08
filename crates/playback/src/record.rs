@@ -34,15 +34,36 @@ pub struct Recorder {
 /// (wasm32, i686), where the 64-bit product doesn't fit in `usize`.
 const MAX_SAMPLES: usize = if usize::BITS >= 64 { (3600u64 * 192_000 * 8) as usize } else { 64 << 20 };
 
+/// Names of the input devices on the default host, for a device picker.
+#[cfg(not(target_os = "freebsd"))]
+pub fn input_device_names() -> Vec<String> {
+    use cpal::traits::HostTrait;
+    cpal::default_host().input_devices().map(|ds| ds.filter_map(|d| crate::device_name(&d)).collect()).unwrap_or_default()
+}
+
+#[cfg(target_os = "freebsd")]
+pub fn input_device_names() -> Vec<String> {
+    Vec::new()
+}
+
 impl Recorder {
     /// Open the default input device. Errors when there is none (the caller shows a message).
-    #[cfg(not(target_os = "freebsd"))]
     pub fn open() -> Result<Recorder, String> {
+        Recorder::open_named(None)
+    }
+
+    /// Open the named input device (see [`input_device_names`]), falling back to the default
+    /// when it is missing. Errors when there is none (the caller shows a message).
+    #[cfg(not(target_os = "freebsd"))]
+    pub fn open_named(wanted: Option<&str>) -> Result<Recorder, String> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         let host = cpal::default_host();
-        let device = host.default_input_device().ok_or("no audio input device")?;
-        #[allow(deprecated)]
-        let name = device.name().unwrap_or_else(|_| "Input".into());
+        let named = wanted.and_then(|w| host.input_devices().ok()?.find(|d| crate::device_name(d).as_deref() == Some(w)));
+        if let (Some(w), None) = (wanted, &named) {
+            log::warn!("input device {w:?} not found; using the default");
+        }
+        let device = named.or_else(|| host.default_input_device()).ok_or("no audio input device")?;
+        let name = crate::device_name(&device).unwrap_or_else(|| "Input".into());
         let cfg = device.default_input_config().map_err(|e| e.to_string())?;
         if cfg.sample_format() != cpal::SampleFormat::F32 {
             return Err(format!("unsupported input sample format {:?}", cfg.sample_format()));
@@ -88,7 +109,7 @@ impl Recorder {
     }
 
     #[cfg(target_os = "freebsd")]
-    pub fn open() -> Result<Recorder, String> {
+    pub fn open_named(_wanted: Option<&str>) -> Result<Recorder, String> {
         Err("recording is not supported on this platform yet".into())
     }
 

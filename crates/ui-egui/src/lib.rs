@@ -94,6 +94,9 @@ pub struct UiState {
     pub video_burn_in: bool,
     pub workspace_dir: String,
     pub configurations: Vec<(String, Value)>,
+    /// Chosen audio devices (Setup › Playback Engine); `None` follows the system default.
+    pub output_device: Option<String>,
+    pub input_device: Option<String>,
 }
 
 impl Default for UiState {
@@ -142,6 +145,8 @@ impl Default for UiState {
             video_burn_in: false,
             workspace_dir: String::new(),
             configurations: Vec::new(),
+            output_device: None,
+            input_device: None,
         }
     }
 }
@@ -452,7 +457,7 @@ impl SoundApp {
         if self.recorder.is_some() || self.recorder_failed || self.player.is_none() {
             return;
         }
-        match soundcraft_playback::record::Recorder::open() {
+        match soundcraft_playback::record::Recorder::open_named(self.ui.input_device.as_deref()) {
             Ok(r) => {
                 if let Some(p) = &self.player {
                     p.set_input(std::sync::Arc::clone(&r.monitor));
@@ -464,6 +469,32 @@ impl SoundApp {
                 self.ui.status = format!("No audio input: {e}");
             }
         }
+    }
+
+    /// Reopen the output on `device` (`None`: system default) and remember the choice.
+    pub fn set_output_device(&mut self, device: Option<String>) {
+        if self.engine.transport.recording {
+            self.ui.status = "Stop recording before changing the audio device".into();
+            return;
+        }
+        let _ = self.run("transport.stop", json!({}));
+        self.ui.output_device = device;
+        let player = Player::with_device(self.engine.session_arc(), self.ui.output_device.as_deref());
+        if let Some(r) = &self.recorder {
+            player.set_input(std::sync::Arc::clone(&r.monitor));
+        }
+        self.player = Some(player);
+    }
+
+    /// Switch the input to `device` (`None`: system default); it opens on the next record.
+    pub fn set_input_device(&mut self, device: Option<String>) {
+        if self.engine.transport.recording {
+            self.ui.status = "Stop recording before changing the audio device".into();
+            return;
+        }
+        self.ui.input_device = device;
+        self.recorder = None;
+        self.recorder_failed = false;
     }
 
     fn finish_recording(&mut self) {
