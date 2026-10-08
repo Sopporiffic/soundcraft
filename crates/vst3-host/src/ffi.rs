@@ -161,6 +161,11 @@ fn open_library(bundle: &Path, exe: &Path) -> Result<libloading::Library, String
                     return Err("InitDll failed".into());
                 }
             }
+            // SAFETY: `ExitDll` is the VST3-mandated Windows exit with this signature; the
+            // module stays loaded for the life of the process, so the pointer stays valid.
+            if let Ok(f) = unsafe { lib.get::<module_exit::ExitDll>(b"ExitDll\0") } {
+                module_exit::register(*f);
+            }
         }
         #[cfg(target_os = "macos")]
         {
@@ -201,6 +206,44 @@ fn open_library(bundle: &Path, exe: &Path) -> Result<libloading::Library, String
             }
         }
         Ok(lib)
+    }
+}
+
+/// Windows modules get their `ExitDll` at process exit. Modules are never unloaded while the
+/// process runs (see [`Bundle`]), but without `ExitDll` some plugins' support libraries crash in
+/// their own `DLL_PROCESS_DETACH` (seen with Waves' `InnerProcessDictionary_x64.dll`, loaded by
+/// merely scanning a WaveShell). A C runtime `atexit` hook runs after `main` returns and before
+/// Windows detaches the DLLs.
+#[cfg(windows)]
+mod module_exit {
+    use std::sync::{Mutex, Once, PoisonError};
+
+    pub type ExitDll = unsafe extern "system" fn() -> bool;
+
+    static EXITS: Mutex<Vec<ExitDll>> = Mutex::new(Vec::new());
+
+    unsafe extern "C" {
+        fn atexit(f: extern "C" fn()) -> i32;
+    }
+
+    /// Calls every registered `ExitDll`, most recently loaded module first.
+    extern "C" fn run() {
+        let exits = std::mem::take(&mut *EXITS.lock().unwrap_or_else(PoisonError::into_inner));
+        for f in exits.into_iter().rev() {
+            // SAFETY: each is a loaded module's own `ExitDll`, called once, after `InitDll`.
+            unsafe { f() };
+        }
+    }
+
+    pub fn register(f: ExitDll) {
+        static HOOK: Once = Once::new();
+        HOOK.call_once(|| {
+            // SAFETY: registers a plain `extern "C"` function with the C runtime's exit list.
+            if unsafe { atexit(run) } != 0 {
+                log::warn!("vst3: cannot register the module exit hook");
+            }
+        });
+        EXITS.lock().unwrap_or_else(PoisonError::into_inner).push(f);
     }
 }
 

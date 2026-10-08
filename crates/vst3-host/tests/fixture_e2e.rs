@@ -227,3 +227,29 @@ fn editor_view_is_probed_and_edits_come_back_as_plain_values() {
     let synth = soundcraft_vst3_host::instantiate_plugin(&id_of("Fixture Synth")).unwrap();
     assert!(synth.editor_size().is_err());
 }
+
+/// Windows: a loaded module gets its `ExitDll` when the process exits. Without it some plugins'
+/// support libraries crash while Windows detaches them (Waves' InnerProcessDictionary_x64.dll,
+/// loaded just by scanning a WaveShell). A child copy of this test binary loads the fixture and
+/// exits; the fixture's `ExitDll` leaves a marker file.
+#[cfg(windows)]
+#[test]
+fn modules_get_exit_dll_at_process_exit() {
+    let marker = std::env::temp_dir().join(format!("vst3-fixture-exit-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    let st = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["load_fixture_then_exit", "--exact", "--ignored", "--test-threads=1"])
+        .env("VST3_FIXTURE_EXIT_MARKER", &marker)
+        .status()
+        .unwrap();
+    assert!(st.success(), "child: {st}");
+    let ran = marker.exists();
+    let _ = std::fs::remove_file(&marker);
+    assert!(ran, "ExitDll was not called at process exit");
+}
+
+#[test]
+#[ignore = "run in a child process by modules_get_exit_dll_at_process_exit"]
+fn load_fixture_then_exit() {
+    assert!(id_of("Fixture Gain").starts_with("vst3:"));
+}
