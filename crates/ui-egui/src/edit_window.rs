@@ -183,13 +183,20 @@ fn main_area(app: &mut SoundApp, ui: &mut Ui) {
     let rulers_rect = Rect::from_min_max(pos2(full.min.x, full.min.y), pos2(full.max.x, full.min.y + rulers_h));
     app.edit_layout.timeline = [tl.min.x, tl.min.y, tl.max.x, tl.max.y];
     ui.painter().rect_filled(full, 0.0, t.window_bg);
-    // Wheel: vertical scroll tracks, shift/horizontal scroll timeline, cmd = zoom.
+    // Wheel: vertical scroll tracks, shift/horizontal scroll timeline, cmd (or pinch) = zoom.
     let hovered = ui.rect_contains_pointer(Rect::from_min_max(pos2(full.min.x, tl.min.y), full.max));
     if hovered {
-        let (delta, mods) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers));
-        if mods.command && delta.y.abs() > 0.0 {
-            let id = if delta.y > 0.0 { "view.zoom_in" } else { "view.zoom_out" };
-            let _ = app.run(id, json!({}));
+        // egui turns Cmd/Ctrl+wheel into `zoom_delta` (the scroll delta stays zero).
+        let (delta, mods, zoom, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers, i.zoom_delta(), i.pointer.hover_pos()));
+        if (zoom - 1.0).abs() > f32::EPSILON {
+            // Zoom around the time under the mouse.
+            let s = app.engine.session();
+            let px = pointer.map_or(0.0, |p| (p.x - tl.min.x).clamp(0.0, tl.width()));
+            let anchor = sample_at(s, tl, tl.min.x + px);
+            let spp = (s.edit.zoom.samples_per_px / f64::from(zoom)).clamp(0.25, 1_000_000.0);
+            let _ = app.run("view.zoom_set", json!({"samples_per_px": spp}));
+            let to = (anchor - soundcraft_time::to_samples(f64::from(px) * spp)).max(0);
+            let _ = app.engine.execute("view.scroll", &json!({"to": to}));
         } else {
             let dx = if mods.shift { delta.y } else { delta.x };
             if dx.abs() > 0.0 {
