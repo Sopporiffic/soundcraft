@@ -42,7 +42,20 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
 }
 
 fn mods_match(want: Modifiers, got: Modifiers) -> bool {
-    want.command == got.command && want.shift == got.shift && want.alt == got.alt && (want.ctrl == got.ctrl || got.mac_cmd)
+    if want.command != got.command || want.shift != got.shift || want.alt != got.alt {
+        return false;
+    }
+    // On Windows and Linux the Ctrl key *is* Command (egui sets both), so it only
+    // satisfies Cmd shortcuts, never Cmd+Ctrl ones.
+    if got.command && !got.mac_cmd {
+        return !want.ctrl;
+    }
+    want.ctrl == got.ctrl || got.mac_cmd
+}
+
+/// Cmd+Ctrl held: on macOS both keys; elsewhere there is no separate Command key.
+fn cmd_ctrl(m: Modifiers) -> bool {
+    m.mac_cmd && m.ctrl
 }
 
 pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
@@ -87,7 +100,7 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers) -> bool {
             let _ = app.run("transport.record", json!({}));
             true
         }
-        Key::S if m.command && m.ctrl => {
+        Key::S if cmd_ctrl(m) => {
             let _ = app.run("window.search", json!({}));
             true
         }
@@ -225,5 +238,33 @@ fn tab_clip(app: &mut SoundApp, back: bool) {
     let next = if back { edges.iter().rev().find(|e| **e < at).copied() } else { edges.iter().find(|e| **e > at).copied() };
     if let Some(n) = next {
         let _ = app.run("transport.locate", json!({"at": n}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WIN_CTRL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: true };
+    const MAC_CMD: Modifiers = Modifiers { alt: false, ctrl: false, shift: false, mac_cmd: true, command: true };
+
+    fn want(s: &str) -> Modifiers {
+        parse(s).map(|(m, _)| m).unwrap_or(Modifiers::NONE)
+    }
+
+    #[test]
+    fn windows_ctrl_is_command() {
+        assert!(mods_match(want("Cmd+Z"), WIN_CTRL));
+        assert!(!mods_match(want("Cmd+Ctrl+X"), WIN_CTRL));
+        assert!(!mods_match(want("Cmd+Shift+Z"), WIN_CTRL));
+        assert!(!cmd_ctrl(WIN_CTRL));
+    }
+
+    #[test]
+    fn mac_cmd_and_cmd_ctrl() {
+        assert!(mods_match(want("Cmd+Z"), MAC_CMD));
+        let both = Modifiers { ctrl: true, ..MAC_CMD };
+        assert!(mods_match(want("Cmd+Ctrl+X"), both));
+        assert!(cmd_ctrl(both));
     }
 }
