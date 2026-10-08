@@ -1090,9 +1090,11 @@ impl Instance {
     /// buses, sets up 32-bit processing and activates the component.
     pub fn configure(&mut self, sample_rate: f64, max_frames: usize, mono: bool) -> Result<Layout, Vst3Error> {
         self.shutdown();
-        let audio = sv::MediaTypes_::kAudio;
-        let event = sv::MediaTypes_::kEvent;
-        let (din, dout) = (sv::BusDirections_::kInput, sv::BusDirections_::kOutput);
+        // The bindings' enum constants are `i32` on Windows and `u32` elsewhere.
+        #[allow(clippy::unnecessary_cast)]
+        let (audio, event) = (sv::MediaTypes_::kAudio as u32, sv::MediaTypes_::kEvent as u32);
+        #[allow(clippy::unnecessary_cast)]
+        let (din, dout) = (sv::BusDirections_::kInput as u32, sv::BusDirections_::kOutput as u32);
         let nin = self.bus_count(audio, din);
         let nout = self.bus_count(audio, dout);
         let current = |s: &Self, dir: u32, n: i32| -> Vec<sv::SpeakerArrangement> {
@@ -1166,7 +1168,9 @@ impl Instance {
         self.context.tempo = 120.0;
         self.context.timeSigNumerator = 4;
         self.context.timeSigDenominator = 4;
-        self.context.state = sv::ProcessContext_::StatesAndFlags_::kTempoValid | sv::ProcessContext_::StatesAndFlags_::kTimeSigValid;
+        #[allow(clippy::unnecessary_cast)]
+        let flags = (sv::ProcessContext_::StatesAndFlags_::kTempoValid | sv::ProcessContext_::StatesAndFlags_::kTimeSigValid) as u32;
+        self.context.state = flags;
         self.host.latency_changed.store(false, Ordering::Relaxed);
         Ok(layout)
     }

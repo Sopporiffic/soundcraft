@@ -301,6 +301,8 @@ mod tests {
             let e = load_bundle(&d.join("z.vst3")).unwrap_err();
             assert!(e.to_string().contains("not a VST3 plugin"), "{e}");
         }
+        #[cfg(not(unix))]
+        let _ = lib;
         let _ = std::fs::remove_dir_all(&d);
     }
 }
