@@ -63,6 +63,9 @@ fn apply_customization(app: &mut SoundApp, ctx: &egui::Context) {
     if app.extra.applied == Some(want) {
         return;
     }
+    // egui's Cmd+Plus/Minus/0 interface zoom would fire alongside our own Cmd+= (Mix/Edit) and
+    // silently rescale the whole UI; UI scale lives in Setup › UI Customization instead.
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     // Only touch the zoom once the user has changed it, so platform scaling stays untouched.
     if app.extra.applied.is_some() || (want.0 - 1.0).abs() > f32::EPSILON {
         ctx.set_zoom_factor(want.0);
