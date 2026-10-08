@@ -662,6 +662,10 @@ extern "system" fn InitDll() -> bool {
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]
 extern "system" fn ExitDll() -> bool {
+    // Lets a test check that the host calls ExitDll at process exit.
+    if let Some(p) = std::env::var_os("VST3_FIXTURE_EXIT_MARKER") {
+        let _ = std::fs::write(p, b"ExitDll");
+    }
     true
 }
 
